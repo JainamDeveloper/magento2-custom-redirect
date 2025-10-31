@@ -12,12 +12,7 @@
         }
     ],
     "require": {
-        "php": "~7.4.0||~8.0.0||~8.1.0||~8.2.0",
-        "magento/framework": ">=102.0.0",
-        "magento/module-cms": ">=103.0.0",
-        "magento/module-catalog": ">=104.0.0",
-        "magento/module-store": ">=101.0.0",
-        "magento/module-url-rewrite": ">=101.0.0"
+        "php": "^8.0 || ^8.1 || ^8.2 || ^8.3"
     },
     "autoload": {
         "files": [
@@ -26,5 +21,7 @@
         "psr-4": {
             "Magneto\\CustomRedirect\\": ""
         }
-    }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
 }
