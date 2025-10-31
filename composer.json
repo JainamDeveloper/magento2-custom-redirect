@@ -1,0 +1,30 @@
+{
+    "name": "jainamdeveloper/magento2-custom-redirect",
+    "description": "Magento 2 module for custom redirect handling on NoRoute pages. Handles intelligent redirects for categories and products on 404 pages.",
+    "type": "magento2-module",
+    "version": "1.0.0",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Jainam Shah",
+            "email": "your-email@example.com",
+            "homepage": "https://github.com/JainamDeveloper"
+        }
+    ],
+    "require": {
+        "php": "~7.4.0||~8.0.0||~8.1.0||~8.2.0",
+        "magento/framework": ">=102.0.0",
+        "magento/module-cms": ">=103.0.0",
+        "magento/module-catalog": ">=104.0.0",
+        "magento/module-store": ">=101.0.0",
+        "magento/module-url-rewrite": ">=101.0.0"
+    },
+    "autoload": {
+        "files": [
+            "registration.php"
+        ],
+        "psr-4": {
+            "Magneto\\CustomRedirect\\": ""
+        }
+    }
+}
