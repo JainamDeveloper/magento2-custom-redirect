@@ -1,151 +1,194 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Magneto\CustomRedirect\Plugin;
 
 use Psr\Log\LoggerInterface;
 use Magento\Framework\UrlInterface;
+use Magento\Framework\Controller\ResultInterface;
+use Magento\Framework\Controller\Result\Redirect;
+use Magento\Framework\Controller\Result\RedirectFactory;
 use Magento\UrlRewrite\Model\UrlFinderInterface;
 use Magento\Catalog\Api\CategoryRepositoryInterface;
 use Magento\Catalog\Api\ProductRepositoryInterface;
-use Magento\Framework\Controller\Result\RedirectFactory;
 use Magento\Store\Model\StoreManagerInterface;
+use Magento\Cms\Controller\Noroute\Index;
 
 class TrackNoRoutePages
 {
-    protected $logger;
-
-    protected $urlInterface;
-
-    protected $urlFinderInterface;
-
-    protected $productRepository;
-
-    protected $categoryRepository;
-
-    protected $resultRedirectFactory;
-
-    protected $storeManager;
-
+    /**
+     * @param LoggerInterface $logger
+     * @param UrlInterface $urlInterface
+     * @param UrlFinderInterface $urlFinderInterface
+     * @param ProductRepositoryInterface $productRepository
+     * @param CategoryRepositoryInterface $categoryRepository
+     * @param RedirectFactory $resultRedirectFactory
+     * @param StoreManagerInterface $storeManager
+     */
     public function __construct(
-        LoggerInterface $logger,
-        UrlInterface $urlInterface,
-        UrlFinderInterface $urlFinderInterface,
-        ProductRepositoryInterface $productRepository,
-        CategoryRepositoryInterface $categoryRepository,
-        RedirectFactory $resultRedirectFactory,
-        StoreManagerInterface $storeManager
+        private readonly LoggerInterface $logger,
+        private readonly UrlInterface $urlInterface,
+        private readonly UrlFinderInterface $urlFinderInterface,
+        private readonly ProductRepositoryInterface $productRepository,
+        private readonly CategoryRepositoryInterface $categoryRepository,
+        private readonly RedirectFactory $resultRedirectFactory,
+        private readonly StoreManagerInterface $storeManager
     ) {
-        $this->logger = $logger;
-        $this->urlInterface = $urlInterface;
-        $this->urlFinderInterface = $urlFinderInterface;
-        $this->productRepository = $productRepository;
-        $this->categoryRepository = $categoryRepository;
-        $this->resultRedirectFactory = $resultRedirectFactory;
-        $this->storeManager = $storeManager;
     }
-    public function aroundExecute(
-        \Magento\Cms\Controller\Noroute\Index $subject,
-        callable $proceed
-    ) {
-        $this->logger->debug('NoRoute URL pluging call');
-        $resultRedirect = $this->resultRedirectFactory->create();
-        $resultRedirect->setHttpResponseCode(301);
-        $currentUrl = $this->urlInterface->getCurrentUrl();
-        $parsedUrl = parse_url($currentUrl, PHP_URL_PATH);
-        $requestPath = ltrim($parsedUrl, '/');
-        $rewrite = $this->urlFinderInterface->findOneByData(['request_path' => $requestPath]);
-        $store = $this->storeManager->getStore();
+
+    /**
+     * Intercept 404 and issue a 301 redirect to the most relevant active page.
+     *
+     * @param Index $subject
+     * @param callable $proceed
+     * @return ResultInterface
+     */
+    public function aroundExecute(Index $subject, callable $proceed): ResultInterface
+    {
+        $redirect = $this->resultRedirectFactory->create();
+        $redirect->setHttpResponseCode(301);
+
+        $store       = $this->storeManager->getStore();
+        $currentUrl  = $this->urlInterface->getCurrentUrl();
+        // phpcs:ignore Magento2.Functions.DiscouragedFunction -- parse_url is safe here; result cast to string
+        $parsedPath  = (string) parse_url($currentUrl, PHP_URL_PATH);
+        $requestPath = ltrim($parsedPath, '/');
+
+        $rewrite = $this->urlFinderInterface->findOneByData([
+            'request_path' => $requestPath,
+            'store_id'     => $store->getId(),
+        ]);
+
         if ($rewrite) {
-            $targetPath = $rewrite->getTargetPath();
-            $matches = array();
-            $categoryId = '';
-            $productId = '';
-            if (strpos($targetPath, 'catalog/category/view') !== false) {
-                preg_match('/id\/(\d+)/', $targetPath, $matches);
-                $categoryId = $matches[1];
-
-                if (!empty($categoryId)) {
-                    try {
-
-                        $category = $this->categoryRepository->get($categoryId);
-                        foreach ($category->getParentIds() as $parentCategoryId) {
-                            $parentCategory = $this->categoryRepository->get($parentCategoryId);
-                            if ($parentCategory->getIsActive() && $parentCategory->getLevel() != 0 && $parentCategory->getLevel() != 1) {
-                                $categoryUrl = $parentCategory->getUrl();
-                                return $resultRedirect->setPath($categoryUrl);
-                            }
-                        }
-                    } catch (\Exception $e) {
-                        return $resultRedirect->setPath($store->getBaseUrl());
-                    }
-                } else {
-                    return $resultRedirect->setPath($store->getBaseUrl());
-                }
-            } elseif (strpos($targetPath, 'catalog/product/view') !== false) {
-
-                preg_match('/id\/(\d+)/', $targetPath, $matches);
-
-                if (count($matches) > 0) {
-                    $productId = $matches[1];
-                }
-
-                if (!empty($productId)) {
-                    try {
-                        $product = $this->productRepository->getById($productId);
-                        if ($product) {
-                            $cats = $product->getCategoryIds();
-                            if ($cats) {
-                                $catsFirst = array();
-                                foreach ($cats as $categoryId) {
-                                    $category = $this->categoryRepository->get($categoryId);
-                                    if ($category->getIsActive() && $category->getLevel() != 0 && $category->getLevel() != 1) {
-                                        return $resultRedirect->setPath($category->getUrl());
-                                    } else {
-                                        $catsFirst = array_merge($catsFirst, $category->getParentIds());
-                                    }
-                                }
-
-                                if (count($catsFirst) > 0) {
-                                    $catsFirst = array_unique($catsFirst);
-                                    $url = "";
-                                    foreach ($catsFirst as $categoryId) {
-                                        $category = $this->categoryRepository->get($categoryId);
-                                        if ($category->getLevel() != 0 && $category->getLevel() != 1) {
-                                            if ($category->getIsActive()) {
-                                                $url = $category->getUrl();
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if (!empty($url)) {
-                                        return $resultRedirect->setPath($url);
-                                    } else {
-                                        return $resultRedirect->setPath($store->getBaseUrl());
-                                    }
-                                }
-                            }
-                        } else {
-                            return $resultRedirect->setPath($store->getBaseUrl());
-                        }
-                    } catch (\Exception $e) {
-                        return $resultRedirect->setPath($store->getBaseUrl());
-                    }
-                } else {
-                    return $resultRedirect->setPath($store->getBaseUrl());
-                }
-            } else {
-                return $resultRedirect->setPath($store->getBaseUrl());
-            }
-        } else {
-            // Matrix Url Rewrite Code            
-            if (preg_match("/view-shape/", $requestPath)) {
-                $prodSku = trim($requestPath, "/view-shape/");
-                $product = $this->productRepository->get($prodSku);
-                $url = $product->getProductUrl();
-                return $resultRedirect->setPath($url);
-            }
-            return $resultRedirect->setPath($store->getBaseUrl());
+            return $this->resolveFromRewrite(
+                $rewrite->getTargetPath(),
+                $redirect,
+                $store->getBaseUrl(),
+                (int) $store->getId()
+            );
         }
-        return $resultRedirect->setPath($store->getBaseUrl());
+
+        // Legacy external URL pattern: view-shape/<sku>
+        if (preg_match('/^view-shape\/(.+)$/', $requestPath, $matches)) {
+            try {
+                $product = $this->productRepository->get($matches[1]);
+                return $redirect->setPath($product->getProductUrl());
+            } catch (\Exception $e) {
+                $this->logger->error('CustomRedirect view-shape error: ' . $e->getMessage());
+            }
+        }
+
+        return $redirect->setPath($store->getBaseUrl());
+    }
+
+    /**
+     * Dispatch rewrite target path to the correct redirect resolver.
+     *
+     * @param string $targetPath
+     * @param Redirect $redirect
+     * @param string $baseUrl
+     * @param int $storeId
+     * @return ResultInterface
+     */
+    private function resolveFromRewrite(
+        string $targetPath,
+        Redirect $redirect,
+        string $baseUrl,
+        int $storeId
+    ): ResultInterface {
+        $matches = [];
+
+        if (strpos($targetPath, 'catalog/category/view') !== false) {
+            preg_match('/id\/(\d+)/', $targetPath, $matches);
+            return $this->redirectToActiveParentCategory((int)($matches[1] ?? 0), $redirect, $baseUrl, $storeId);
+        }
+
+        if (strpos($targetPath, 'catalog/product/view') !== false) {
+            preg_match('/id\/(\d+)/', $targetPath, $matches);
+            return $this->redirectToProductCategory((int)($matches[1] ?? 0), $redirect, $baseUrl, $storeId);
+        }
+
+        return $redirect->setPath($baseUrl);
+    }
+
+    /**
+     * Redirect to nearest active ancestor — reversed so closest parent is checked first.
+     *
+     * @param int $categoryId
+     * @param Redirect $redirect
+     * @param string $baseUrl
+     * @param int $storeId
+     * @return ResultInterface
+     */
+    private function redirectToActiveParentCategory(
+        int $categoryId,
+        Redirect $redirect,
+        string $baseUrl,
+        int $storeId
+    ): ResultInterface {
+        if (!$categoryId) {
+            return $redirect->setPath($baseUrl);
+        }
+
+        try {
+            $category = $this->categoryRepository->get($categoryId, $storeId);
+
+            foreach (array_reverse($category->getParentIds()) as $parentId) {
+                $parent = $this->categoryRepository->get($parentId, $storeId);
+                if ($parent->getIsActive() && $parent->getLevel() > 1) {
+                    return $redirect->setPath($parent->getUrl());
+                }
+            }
+        } catch (\Exception $e) {
+            $this->logger->error('CustomRedirect category error: ' . $e->getMessage());
+        }
+
+        return $redirect->setPath($baseUrl);
+    }
+
+    /**
+     * Redirect to the first active category the product belongs to.
+     *
+     * @param int $productId
+     * @param Redirect $redirect
+     * @param string $baseUrl
+     * @param int $storeId
+     * @return ResultInterface
+     */
+    private function redirectToProductCategory(
+        int $productId,
+        Redirect $redirect,
+        string $baseUrl,
+        int $storeId
+    ): ResultInterface {
+        if (!$productId) {
+            return $redirect->setPath($baseUrl);
+        }
+
+        try {
+            $product     = $this->productRepository->getById($productId, false, $storeId);
+            $categoryIds = $product->getCategoryIds();
+            $parentIds   = [];
+
+            foreach ($categoryIds as $categoryId) {
+                $category = $this->categoryRepository->get($categoryId, $storeId);
+                if ($category->getIsActive() && $category->getLevel() > 1) {
+                    return $redirect->setPath($category->getUrl());
+                }
+                $parentIds[] = array_reverse($category->getParentIds());
+            }
+
+            foreach (array_unique(array_merge(...$parentIds)) as $categoryId) {
+                $category = $this->categoryRepository->get($categoryId, $storeId);
+                if ($category->getIsActive() && $category->getLevel() > 1) {
+                    return $redirect->setPath($category->getUrl());
+                }
+            }
+        } catch (\Exception $e) {
+            $this->logger->error('CustomRedirect product error: ' . $e->getMessage());
+        }
+
+        return $redirect->setPath($baseUrl);
     }
 }
